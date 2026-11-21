@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks, status, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -189,6 +189,40 @@ def get_job_errors(
         ]
     }
 
+@app.get("/api/v1/jobs/{job_id}/quarantine/export", tags=["Jobs"])
+def export_quarantined_csv(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """Exports all quarantined error rows for a job as a downloadable CSV audit file."""
+    import csv
+    import io
+
+    job = db.query(IngestionJob).filter(IngestionJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="IngestionJob not found.")
+
+    errors = (
+        db.query(ValidationError)
+        .filter(ValidationError.job_id == job_id)
+        .order_by(ValidationError.row_number.asc())
+        .all()
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["row_number", "error_code", "error_message", "event_id", "raw_payload"])
+    for err in errors:
+        writer.writerow([err.row_number, err.error_code, err.error_message, err.event_id or "", err.raw_payload or ""])
+
+    output.seek(0)
+    filename = f"quarantined_audit_job_{job_id[:8]}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
 @app.get("/api/v1/datasets", response_model=list[DatasetResponse], tags=["Datasets"])
 def list_datasets(db: Session = Depends(get_db)):
     """List all registered datasets."""
@@ -355,14 +389,29 @@ def serve_web_dashboard():
         <span class="text-xs bg-zinc-100 text-zinc-600 border border-zinc-300 dark:bg-neutral-900 dark:text-zinc-400 dark:border-neutral-800 px-2 py-0.5 rounded-md font-mono">v1.0.0</span>
       </div>
 
-      <div class="flex items-center space-x-4 text-xs">
-        <div id="metricsThroughput" class="text-zinc-500 dark:text-zinc-400 font-mono hidden sm:block">
+      <div class="flex items-center space-x-2 sm:space-x-3 text-xs">
+        <!-- RBAC Role Switcher -->
+        <div class="flex items-center space-x-1.5 bg-zinc-100 dark:bg-neutral-900 border border-zinc-200 dark:border-neutral-800 rounded-lg px-2.5 py-1 text-xs">
+          <span class="text-zinc-500 dark:text-zinc-400 font-medium hidden md:inline">Role:</span>
+          <select id="userRoleSelect" onchange="onRoleChange(this.value)" class="bg-transparent text-xs font-semibold text-zinc-900 dark:text-zinc-100 focus:outline-none cursor-pointer">
+            <option value="owner-token-2026">Alice (Owner) [Full Access]</option>
+            <option value="analyst-token-2026">Bob (Analyst) [Read-Only]</option>
+          </select>
+        </div>
+
+        <!-- Swagger Docs Pill -->
+        <a href="/docs" target="_blank" class="hidden sm:flex items-center space-x-1 px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-neutral-800 bg-zinc-100 hover:bg-zinc-200 dark:bg-neutral-900 dark:hover:bg-neutral-850 text-xs font-medium text-zinc-700 dark:text-zinc-300 transition" title="Interactive Swagger API Docs">
+          <svg class="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+          <span>Swagger Docs</span>
+        </a>
+
+        <div id="metricsThroughput" class="text-zinc-500 dark:text-zinc-400 font-mono hidden lg:block">
           Avg: <span class="text-blue-600 dark:text-blue-400 font-semibold" id="valAvgThroughput">--</span> rows/s
         </div>
         
         <div id="systemStatus" class="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-medium">
           <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>API Operational</span>
+          <span class="hidden sm:inline">API Operational</span>
         </div>
 
         <!-- Light / Dark Mode Toggle Button -->
@@ -377,6 +426,17 @@ def serve_web_dashboard():
   </header>
 
   <main class="max-w-7xl mx-auto px-4 py-8 space-y-8">
+    <!-- RBAC Security Alert Banner (Triggered when Analyst attempts upload) -->
+    <div id="rbacAlertBanner" class="hidden p-4 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/40 backdrop-blur text-amber-900 dark:text-amber-200 flex items-start space-x-3 transition">
+      <svg class="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+      <div class="flex-1 text-sm">
+        <span class="font-bold text-amber-700 dark:text-amber-300">RBAC ACCESS CONTROL ENFORCED (HTTP 403 Forbidden):</span>
+        <span class="ml-1">Tài khoản Bob (Analyst) chỉ có quyền đọc số liệu (Read-only).</span>
+        <div class="text-xs text-amber-700 dark:text-amber-400/90 mt-1">Nguyên tắc bảo mật Least Privilege: Chỉ tài khoản Alice (Dataset Owner) mới được phép nạp dataset mới. Vui lòng chuyển vai trò thành Alice (Owner) ở góc phải trên cùng để thực hiện tải lên.</div>
+      </div>
+      <button onclick="document.getElementById('rbacAlertBanner').classList.add('hidden')" class="text-amber-600 dark:text-amber-400 hover:opacity-75 text-xs font-bold px-2 py-1">Dismiss</button>
+    </div>
+
     <!-- Actionable Alert Banner (Hidden by default) -->
     <div id="alertBanner" class="hidden p-4 rounded-xl border border-rose-300 bg-rose-50 dark:border-rose-900/60 dark:bg-rose-950/40 backdrop-blur text-rose-800 dark:text-rose-200 flex items-start space-x-3 transition">
       <svg class="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
@@ -483,7 +543,13 @@ def serve_web_dashboard():
           <h3 class="font-semibold text-base tracking-tight">Quarantined Rows Analysis (Data Hygiene)</h3>
           <p class="text-xs text-zinc-500 dark:text-zinc-400">Malformed rows isolated during ingestion to preserve financial calculation integrity.</p>
         </div>
-        <span id="quarantineBadge" class="text-xs bg-rose-100 text-rose-800 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-400 dark:border-rose-900 px-3 py-1 rounded-full font-mono font-semibold">0 Errors</span>
+        <div class="flex items-center space-x-2">
+          <button id="exportQuarantineBtn" onclick="exportQuarantineCsv()" class="hidden text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-300 dark:border-rose-900/60 px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1">
+            <svg class="w-3.5 h-3.5 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>Export CSV</span>
+          </button>
+          <span id="quarantineBadge" class="text-xs bg-rose-100 text-rose-800 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-400 dark:border-rose-900 px-3 py-1 rounded-full font-mono font-semibold">0 Errors</span>
+        </div>
       </div>
 
       <!-- Breakdown Pills -->
@@ -518,6 +584,16 @@ def serve_web_dashboard():
     let barChart = null;
     let pieChart = null;
     let latestCategoriesData = null;
+    let activeToken = localStorage.getItem('user_token') || 'owner-token-2026';
+
+    const roleSelect = document.getElementById('userRoleSelect');
+    if (roleSelect) roleSelect.value = activeToken;
+
+    function onRoleChange(token) {
+      activeToken = token;
+      localStorage.setItem('user_token', token);
+      document.getElementById('rbacAlertBanner').classList.add('hidden');
+    }
 
     function isDarkMode() {
       return document.documentElement.classList.contains('dark');
@@ -602,8 +678,10 @@ def serve_web_dashboard():
       progressBar.style.width = '10%';
       jobProgressPercent.innerText = '0%';
 
+      document.getElementById('rbacAlertBanner').classList.add('hidden');
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/v1/datasets/upload', true);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + activeToken);
 
       // Real-time network upload progress
       xhr.upload.onprogress = function(event) {
@@ -618,6 +696,14 @@ def serve_web_dashboard():
       };
 
       xhr.onload = function() {
+        if (xhr.status === 403) {
+          document.getElementById('rbacAlertBanner').classList.remove('hidden');
+          uploadBtn.disabled = false;
+          uploadBtn.innerText = 'Upload & Process';
+          progressContainer.classList.add('hidden');
+          return;
+        }
+
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const data = JSON.parse(xhr.responseText);
@@ -709,6 +795,12 @@ def serve_web_dashboard():
             select.appendChild(opt);
           }
         });
+        if (versions.length > 0 && versions[0].job_id) {
+          currentJobId = versions[0].job_id;
+          fetchJobErrors(currentJobId);
+          const exportBtn = document.getElementById('exportQuarantineBtn');
+          if (exportBtn) exportBtn.classList.remove('hidden');
+        }
       } catch (e) {}
     }
 
@@ -869,6 +961,14 @@ def serve_web_dashboard():
         if (currentVersionNumber) url += '?version=' + currentVersionNumber;
         window.location.href = url;
       }
+    }
+
+    function exportQuarantineCsv() {
+      if (!currentJobId) {
+        alert('No job active to export errors.');
+        return;
+      }
+      window.location.href = '/api/v1/jobs/' + currentJobId + '/quarantine/export';
     }
   </script>
 </body>

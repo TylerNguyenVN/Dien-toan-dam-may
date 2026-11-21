@@ -88,3 +88,18 @@ def test_2_process_and_10_concurrent_readers(client):
     print(f"Median Latency: {median_latency:.2f} ms")
     print(f"P95 Latency: {p95_latency:.2f} ms")
     assert p95_latency < 100.0, f"P95 latency should remain well under 100ms (got {p95_latency:.2f}ms)"
+
+def test_export_quarantined_csv(client):
+    db = SessionLocal()
+    try:
+        from backend.app.models import IngestionJob
+        job = db.query(IngestionJob).filter(IngestionJob.status == "COMPLETED").first()
+        if job:
+            res = client.get(f"/api/v1/jobs/{job.id}/quarantine/export")
+            assert res.status_code == 200
+            assert "text/csv" in res.headers["content-type"]
+            assert "row_number,error_code" in res.text
+            lines = res.text.strip().splitlines()
+            assert len(lines) > 1, "Exported CSV must contain headers and error rows"
+    finally:
+        db.close()
