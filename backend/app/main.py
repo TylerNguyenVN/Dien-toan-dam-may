@@ -574,6 +574,13 @@ def serve_web_dashboard():
       const isFailureDrill = document.getElementById('failureDrillCheckbox').checked;
 
       const file = fileInput.files[0];
+
+      // Check Vercel serverless request body size limit (4.5 MB)
+      if (window.location.hostname.includes('vercel.app') && file.size > 4.4 * 1024 * 1024) {
+        alert("⚠️ Vercel Serverless Function giới hạn dung lượng tải lên tối đa là 4.5 MB.\nFile '" + file.name + "' hiện tại là " + (file.size / (1024 * 1024)).toFixed(2) + " MB.\n\n👉 Vui lòng chọn file 'demo_50k.csv' (3.6 MB) hoặc 'reference_dataset.csv' khi chạy trên Vercel.\n(Khi chạy trên Docker / AWS / Local sẽ không bị giới hạn này).");
+        return;
+      }
+
       const formData = new FormData();
       formData.append('file', file);
       formData.append('name', file.name.replace('.csv', ''));
@@ -595,7 +602,10 @@ def serve_web_dashboard():
         });
 
         if (!response.ok) {
-          throw new Error('Upload failed: ' + response.statusText);
+          if (response.status === 413) {
+            throw new Error("File quá lớn so với giới hạn 4.5 MB của Vercel Serverless. Vui lòng chọn file 'demo_50k.csv' hoặc 'reference_dataset.csv'.");
+          }
+          throw new Error('Upload failed: ' + (response.statusText || response.status));
         }
 
         const data = await response.json();
