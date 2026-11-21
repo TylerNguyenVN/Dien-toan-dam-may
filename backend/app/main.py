@@ -557,14 +557,14 @@ def serve_web_dashboard():
           if (list.length > 0) {
             currentDatasetId = list[0].id;
             await loadVersionList(currentDatasetId);
-            fetchDashboard(currentDatasetId);
+            await fetchDashboard(currentDatasetId);
           }
         }
       } catch (e) {}
     }
     autoLoadExisting();
 
-    async function handleUpload() {
+    function handleUpload() {
       const fileInput = document.getElementById('csvFileInput');
       if (!fileInput.files || fileInput.files.length === 0) {
         alert('Please choose a CSV file first.');
@@ -572,12 +572,11 @@ def serve_web_dashboard():
       }
 
       const isFailureDrill = document.getElementById('failureDrillCheckbox').checked;
-
       const file = fileInput.files[0];
 
       // Check Vercel serverless request body size limit (4.5 MB)
       if (window.location.hostname.includes('vercel.app') && file.size > 4.4 * 1024 * 1024) {
-        alert("⚠️ Vercel Serverless Function giới hạn dung lượng tải lên tối đa là 4.5 MB.\nFile '" + file.name + "' hiện tại là " + (file.size / (1024 * 1024)).toFixed(2) + " MB.\n\n👉 Vui lòng chọn file 'demo_50k.csv' (3.6 MB) hoặc 'reference_dataset.csv' khi chạy trên Vercel.\n(Khi chạy trên Docker / AWS / Local sẽ không bị giới hạn này).");
+        alert("⚠️ Vercel Serverless Function giới hạn dung lượng tải lên tối đa là 4.5 MB.\\nFile '" + file.name + "' hiện tại là " + (file.size / (1024 * 1024)).toFixed(2) + " MB.\\n\\n👉 Vui lòng chọn file 'demo_50k.csv' (3.6 MB) hoặc 'reference_dataset.csv' khi chạy trên Vercel.\\n(Khi chạy trên Docker / AWS / Render sẽ không bị giới hạn này).");
         return;
       }
 
@@ -588,38 +587,71 @@ def serve_web_dashboard():
         formData.append('fail_at_row', '30000');
       }
 
-      document.getElementById('uploadBtn').disabled = true;
-      document.getElementById('progressContainer').classList.remove('hidden');
-      document.getElementById('progressBar').classList.remove('bg-rose-500');
-      document.getElementById('progressBar').classList.add('bg-zinc-900', 'dark:bg-zinc-100');
-      document.getElementById('jobStatusText').innerText = 'Uploading file...';
-      document.getElementById('progressBar').style.width = '20%';
+      const uploadBtn = document.getElementById('uploadBtn');
+      const progressContainer = document.getElementById('progressContainer');
+      const progressBar = document.getElementById('progressBar');
+      const jobStatusText = document.getElementById('jobStatusText');
+      const jobProgressPercent = document.getElementById('jobProgressPercent');
 
-      try {
-        const response = await fetch('/api/v1/datasets/upload', {
-          method: 'POST',
-          body: formData
-        });
+      uploadBtn.disabled = true;
+      uploadBtn.innerText = 'Uploading...';
+      progressContainer.classList.remove('hidden');
+      progressBar.classList.remove('bg-rose-500');
+      progressBar.classList.add('bg-zinc-900', 'dark:bg-zinc-100');
+      jobStatusText.innerText = 'Uploading file (0%)...';
+      progressBar.style.width = '10%';
+      jobProgressPercent.innerText = '0%';
 
-        if (!response.ok) {
-          if (response.status === 413) {
-            throw new Error("File quá lớn so với giới hạn 4.5 MB của Vercel Serverless. Vui lòng chọn file 'demo_50k.csv' hoặc 'reference_dataset.csv'.");
-          }
-          throw new Error('Upload failed: ' + (response.statusText || response.status));
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/v1/datasets/upload', true);
+
+      // Real-time network upload progress
+      xhr.upload.onprogress = function(event) {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          const uploadedMB = (event.loaded / (1024 * 1024)).toFixed(1);
+          const totalMB = (event.total / (1024 * 1024)).toFixed(1);
+          jobProgressPercent.innerText = percent + '%';
+          progressBar.style.width = Math.max(10, Math.round(percent * 0.5)) + '%';
+          jobStatusText.innerText = 'Uploading: ' + uploadedMB + 'MB / ' + totalMB + 'MB (' + percent + '%)...';
         }
+      };
 
-        const data = await response.json();
-        currentDatasetId = data.dataset_id;
-        currentJobId = data.job_id;
-        document.getElementById('jobStatusText').innerText = 'Ingesting & Validating asynchronously...';
-        document.getElementById('progressBar').style.width = '50%';
+      xhr.onload = function() {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            currentDatasetId = data.dataset_id;
+            currentJobId = data.job_id;
+            uploadBtn.innerText = 'Processing...';
+            jobStatusText.innerText = 'Ingesting & Validating asynchronously...';
+            progressBar.style.width = '60%';
+            pollJobStatus(data.job_id);
+          } catch (e) {
+            alert('Response parse error');
+            uploadBtn.disabled = false;
+            uploadBtn.innerText = 'Upload & Process';
+          }
+        } else {
+          if (xhr.status === 413) {
+            alert("File quá lớn so với giới hạn của serverless. Vui lòng chọn file nhỏ hơn.");
+          } else {
+            alert('Upload failed HTTP ' + xhr.status + ': ' + xhr.statusText);
+          }
+          uploadBtn.disabled = false;
+          uploadBtn.innerText = 'Upload & Process';
+          progressContainer.classList.add('hidden');
+        }
+      };
 
-        pollJobStatus(data.job_id);
-      } catch (err) {
-        alert(err.message);
-        document.getElementById('uploadBtn').disabled = false;
-        document.getElementById('progressContainer').classList.add('hidden');
-      }
+      xhr.onerror = function() {
+        alert('Network error while uploading. Please check your internet connection.');
+        uploadBtn.disabled = false;
+        uploadBtn.innerText = 'Upload & Process';
+        progressContainer.classList.add('hidden');
+      };
+
+      xhr.send(formData);
     }
 
     function pollJobStatus(jobId) {
