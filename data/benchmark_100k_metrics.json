@@ -1,0 +1,48 @@
+{
+  "metadata": {
+    "dataset_file": "benchmark_100k.csv",
+    "seed": 42,
+    "total_rows_generated": 100000,
+    "source_sha256": "920920b3c75e7b73d49c56d942984e1177cccdcadb06be4706f16c070efc1e3c",
+    "schema_version": "1.0.0"
+  },
+  "validation_summary": {
+    "total_rows": 100000,
+    "accepted_rows": 98500,
+    "quarantined_rows": 1500,
+    "quarantine_reasons": {
+      "invalid_category": 214,
+      "float_amount": 245,
+      "non_numeric_amount": 212,
+      "missing_event_id": 218,
+      "empty_amount": 216,
+      "bad_timestamp": 193,
+      "duplicate_event_id": 202
+    }
+  },
+  "aggregate_results": {
+    "grand_total_amount_minor": 24637040347,
+    "categories": {
+      "PAYMENT": {
+        "count": 19632,
+        "total_amount_minor": 4927433783
+      },
+      "REFUND": {
+        "count": 19456,
+        "total_amount_minor": 4872682185
+      },
+      "TRANSFER": {
+        "count": 19905,
+        "total_amount_minor": 4963687710
+      },
+      "FEE": {
+        "count": 19621,
+        "total_amount_minor": 4907224967
+      },
+      "SUBSCRIPTION": {
+        "count": 19886,
+        "total_amount_minor": 4966011702
+      }
+    }
+  }
+}
