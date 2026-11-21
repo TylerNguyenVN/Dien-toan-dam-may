@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: csv-analytics-dashboard
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: singapore
+    envVars:
+      - key: PORT
+        value: 8000
